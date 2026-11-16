@@ -1,3 +1,4 @@
+import { hasOtherAgentProcessOwner } from '../../agent-status/process/agent-process-presence'
 import {
   prefetchCodexTranscripts,
   type CodexTranscriptReadHint
@@ -77,16 +78,27 @@ function prefetchPaneTranscripts(
   hook: Record<string, unknown> | undefined,
   statusOf: (paneKey: string) => AgentHookEventPayload | undefined
 ): Promise<void> {
+  const owner = state.lastStatusByPaneKey.get(paneKey)
+  const mayReset = Boolean(
+    hook &&
+    !owner?.providerSessionOnly &&
+    hasOtherAgentProcessOwner(
+      owner?.agentPresence && { ...owner.agentPresence, suspended: undefined },
+      { agent: source }
+    )
+  )
   if (source === 'muse') {
     const log = state.musePaneStateByPaneKey.get(paneKey)?.log
     const sessionId = (hook && readString(hook, 'session_id')) ?? log?.sessionId
-    return sessionId ? prefetchMuseSessionLog(reads, sessionId, log) : Promise.resolve()
+    return sessionId
+      ? prefetchMuseSessionLog(reads, sessionId, log, undefined, mayReset)
+      : Promise.resolve()
   }
   return prefetchCodexTranscripts(
     reads,
     state.codexSubagentTranscriptByPaneKey.get(paneKey),
     state.codexSubagentRosterByPaneKey.get(paneKey),
-    hook ? codexHookReadHint(state, paneKey, hook, statusOf) : {}
+    hook ? { ...codexHookReadHint(state, paneKey, hook, statusOf), mayReset } : {}
   )
 }
 

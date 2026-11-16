@@ -26,7 +26,7 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...counted, default: counted }
 })
 
-import { createHookListenerState } from '../listener-state'
+import { clearPaneCacheState, createHookListenerState } from '../listener-state'
 import { normalizeHookPayload } from '../normalization/normalize-hook-payload'
 import { seedLegacyAgentStatusForTests } from '../legacy-agent-status-test-seed'
 import { pollCodexTranscriptStatus } from '../providers/codex/codex-transcript-poll'
@@ -117,23 +117,45 @@ describe('Codex transcript reads', () => {
     }
   )
 
-  it('applies a pending hook, its poll and the next hook in pane order', async () => {
+  it('orders a replacement hook, its poll and the next hook across owner retirement', async () => {
     const root = mkdtempSync(join(tmpdir(), 'codex-transcript-order-'))
     dirs.push(root)
     const filePath = join(root, 'parent.jsonl')
-    writeFileSync(filePath, '')
+    writeFileSync(
+      filePath,
+      line({ type: 'turn_context', payload: { approvals_reviewer: 'auto_review' } })
+    )
     const state = createHookListenerState()
     const body = (turnId: string) => ({
       paneKey: PANE_KEY,
       payload: {
-        hook_event_name: 'UserPromptSubmit',
+        hook_event_name: turnId === 'first' ? 'PermissionRequest' : 'UserPromptSubmit',
+        tool_name: 'Bash',
         session_id: 'root-session',
         turn_id: turnId,
         prompt: turnId,
         transcript_path: filePath
       }
     })
+    const prime = await enterHookTranscriptTurn(state, 'codex', body('first'))
+    try {
+      const event = prime.apply(() =>
+        normalizeHookPayload(state, 'codex', body('first'), 'production')
+      )!
+      seedLegacyAgentStatusForTests(state, {
+        ...event,
+        agentPresence: {
+          agent: 'claude',
+          process: { platform: 'linux', pid: 100, startTime: '1' },
+          sessionOwner: true
+        }
+      })
+    } finally {
+      prime.release()
+    }
     const first = await enterHookTranscriptTurn(state, 'codex', body('first'))
+    // The owner probe retires the exited process before the replacement hook normalizes.
+    clearPaneCacheState(state, PANE_KEY)
     const states: string[] = []
     let original: NonNullable<ReturnType<typeof normalizeHookPayload>>
     const polled = enterTranscriptPollTurn(state, 'codex', PANE_KEY, body('first')).then((turn) => {

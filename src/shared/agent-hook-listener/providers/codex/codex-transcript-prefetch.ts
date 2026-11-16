@@ -30,6 +30,8 @@ export type CodexTranscriptReadHint = {
   child?: { agentId: string; path?: string; starting: boolean }
   /** SessionStart replaces the pane's transcript state, so the parent restarts at offset 0. */
   restart?: boolean
+  /** An owner challenge may retire provider cursors before normalization. */
+  mayReset?: boolean
 }
 
 /** Fetches into `reads`, off the event loop, every rollout read the synchronous reconcile, reviewer and identity code make next. */
@@ -50,6 +52,9 @@ export async function prefetchCodexTranscripts(
   if (reviewerPath && reviewerPath !== parentPath) {
     const offset = transcript?.reviewerCursorsByPath.get(reviewerPath)?.offset ?? 0
     jobs.push(fetchTranscriptTail(reads, reviewerPath, offset))
+    if (hint.mayReset && offset > 0) {
+      jobs.push(fetchTranscriptTail(reads, reviewerPath, 0))
+    }
   }
   const heads = new Set(roster ? pendingCodexSubagentIdentityPaths(roster) : [])
   const childPath = normalizedTranscriptPath(hint.child?.path)
@@ -80,6 +85,9 @@ async function fetchParentAndChildren(
       ? { ...transcript.parent }
       : { filePath: parentPath, offset: 0, carry: '' }
   const jobs: Promise<void>[] = [fetchTranscriptTail(reads, parentPath, parent.offset)]
+  if (hint.mayReset && parent.offset > 0) {
+    jobs.push(fetchTranscriptTail(reads, parentPath, 0))
+  }
   const unresolved = new Map<string, number>()
   for (const [id, child] of continuing ? (transcript?.subagents ?? []) : []) {
     if (child.filePath) {

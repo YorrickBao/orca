@@ -133,7 +133,8 @@ export async function prefetchMuseSessionLog(
   reads: TranscriptReads,
   sessionId: string,
   log: MuseSessionLogState | undefined,
-  sessionsDir?: string
+  sessionsDir?: string,
+  mayReset = false
 ): Promise<void> {
   const current = log?.sessionId === sessionId ? log : undefined
   let filePath = current?.cursor.filePath
@@ -143,9 +144,13 @@ export async function prefetchMuseSessionLog(
     if (!filePath) {
       return
     }
-    reads.locatedPaths.set(sessionId, filePath)
   }
-  await fetchTranscriptTail(reads, filePath, current?.cursor.filePath ? current.cursor.offset : 0)
+  reads.locatedPaths.set(sessionId, filePath)
+  const offset = current?.cursor.filePath ? current.cursor.offset : 0
+  await Promise.all([
+    fetchTranscriptTail(reads, filePath, offset),
+    ...(mayReset && offset > 0 ? [fetchTranscriptTail(reads, filePath, 0)] : [])
+  ])
 }
 
 /** Advances the log and returns the newest unanswered `request_user_input` prompt of `turnId`'s run. */
