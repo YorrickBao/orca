@@ -1,3 +1,4 @@
+import { enterTranscriptPollTurn } from '../../../shared/agent-hook-listener/transcripts/hook-transcript-read-ahead'
 import { ClaudeHelperKillPoller } from '../../../shared/agent-hook-listener/providers/claude/transcripts/claude-helper-kill-poller'
 import { pollCodexTranscriptStatus } from '../../../shared/agent-hook-listener/providers/codex/codex-transcript-poll'
 // Retry late transcript results against the same cached event; one owner cancels both timer families before cache teardown.
@@ -26,7 +27,7 @@ const ASSISTANT_MESSAGE_RETRY_MS = 50
 const CODEX_SUBAGENT_POLL_MS = 1_000
 
 type TranscriptPoll = {
-  source: AgentHookSource
+  source: 'codex' | 'muse'
   body: unknown
   original: AgentHookEventPayload
   env?: string
@@ -166,17 +167,37 @@ export class AgentHookResultRetryScheduler {
     }
   }
 
-  private runTranscriptPoll(paneKey: string, poll: TranscriptPoll): void {
-    const { source, body, original, env, version } = poll
+  private ownsTranscriptPoll(paneKey: string, poll: TranscriptPoll): boolean {
     // Keep the identity check at callback time: a newer event supersedes this
     // payload even when its pane still has transcript children.
-    if (
-      paneKey !== original.paneKey ||
-      !this.host.isListening() ||
-      this.host.state.lastStatusByPaneKey.get(original.paneKey) !== original
-    ) {
-      return
+    return (
+      paneKey === poll.original.paneKey &&
+      this.host.isListening() &&
+      this.host.state.lastStatusByPaneKey.get(poll.original.paneKey) === poll.original
+    )
+  }
+
+  private runTranscriptPoll(paneKey: string, poll: TranscriptPoll): Promise<void> | undefined {
+    if (!this.ownsTranscriptPoll(paneKey, poll)) {
+      return undefined
     }
+    return enterTranscriptPollTurn(this.host.state, poll.source, paneKey, poll.body)
+      .then((turn) => {
+        try {
+          if (this.ownsTranscriptPoll(paneKey, poll)) {
+            turn.apply(() => this.applyTranscriptPoll(paneKey, poll))
+          }
+        } finally {
+          turn.release()
+        }
+      })
+      .catch((err) => {
+        console.error('[agent-hooks] transcript poll failed:', err)
+      })
+  }
+
+  private applyTranscriptPoll(paneKey: string, poll: TranscriptPoll): void {
+    const { source, body, original, env, version } = poll
     const logOffset = source === 'muse' ? museLogOffset(this.host.state, paneKey) : undefined
     const event =
       source === 'codex'

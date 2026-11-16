@@ -12,7 +12,7 @@ afterEach(() => {
   }
 })
 
-describe('readJsonlFirstRecord', () => {
+describe('transcript read-ahead', () => {
   it.skipIf(process.platform === 'win32')(
     'rejects writer-less FIFOs and symlinks to them without blocking',
     async () => {
@@ -23,9 +23,7 @@ describe('readJsonlFirstRecord', () => {
       const created = await runProcess({ program: 'mkfifo', args: [fifo], timeoutMs: 5000 })
       expect(created.code).toBe(0)
       symlinkSync(fifo, link)
-      const readerPath = resolve(
-        'src/shared/agent-hook-listener/providers/codex/codex-rollout-jsonl-cursor.ts'
-      )
+      const readerPath = resolve('src/shared/agent-hook-listener/transcripts/transcript-read-ahead.ts')
       const result = await runProcess({
         program: process.execPath,
         args: [
@@ -33,10 +31,19 @@ describe('readJsonlFirstRecord', () => {
           'tsx',
           '--eval',
           `const assert = require('node:assert/strict');
-const { readJsonlFirstRecord } = require(${JSON.stringify(readerPath)});
-for (const path of ${JSON.stringify([fifo, link, directory])}) {
-  assert.equal(readJsonlFirstRecord(path), undefined);
-}`
+const { TranscriptReads, fetchTranscriptHead, fetchTranscriptTail } = require(${JSON.stringify(readerPath)});
+(async () => {
+  for (const path of ${JSON.stringify([fifo, link, directory])}) {
+    const reads = new TranscriptReads('poll');
+    await fetchTranscriptHead(reads, path);
+    await fetchTranscriptTail(reads, path, 0);
+    assert.equal(reads.heads.get(path), 'unreadable');
+    assert.equal(reads.tails.get('0\\0' + path), 'missing');
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});`
         ],
         timeoutMs: 5000
       })

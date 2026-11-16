@@ -1,6 +1,7 @@
-import { basename, dirname, extname, isAbsolute, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 import {
+  normalizedTranscriptPath,
   readJsonlCursor,
   readTranscriptDirectory,
   record,
@@ -12,7 +13,7 @@ import { reconcileCodexTranscriptTurn, type CodexTranscriptTurn } from './codex-
 
 import { isCodexStatusTranscriptLine } from './codex-status-transcript-line'
 
-import { readApprovalsReviewer } from './codex-subagent-reviewer'
+import { markReviewerUnread, readApprovalsReviewer } from './codex-subagent-reviewer'
 import type { CodexApprovalsReviewer } from './codex-subagent-reviewer'
 
 import { codexSubagentPathLabel } from './codex-agent-path'
@@ -48,10 +49,12 @@ export type CodexSubagentTranscriptState = {
   reviewersByPath: Map<string, CodexApprovalsReviewer>
   /** Who resolves this turn's approvals in the parent rollout. */
   approvalsReviewer?: CodexApprovalsReviewer
+  /** Rollouts whose reviewer could not be read this time, so no approval there is presumed auto-reviewed. */
+  unreadReviewerPaths: Set<string>
 }
 
 // Why: Codex files each rollout under its OWN local start date, so a session running past midnight spawns children into a sibling day directory.
-function childDayDirectory(parentPath: string, startedAt: number): string | undefined {
+export function childDayDirectory(parentPath: string, startedAt: number): string | undefined {
   const dayDir = dirname(parentPath)
   const monthDir = dirname(dayDir)
   const yearDir = dirname(monthDir)
@@ -76,12 +79,12 @@ function childDayDirectory(parentPath: string, startedAt: number): string | unde
   )
 }
 
-function resolveChildTranscript(
+export function resolveChildTranscript(
   parentPath: string,
   threadId: string,
   startedAt: number,
-  entriesByDirectory: Map<string, string[]>
-): string | undefined {
+  entriesByDirectory: Map<string, string[] | undefined>
+): string | 'unfetched' | undefined {
   if (!SAFE_THREAD_ID.test(threadId)) {
     return undefined
   }
@@ -90,20 +93,20 @@ function resolveChildTranscript(
   const childDir = childDayDirectory(parentPath, startedAt)
   const directories = childDir && childDir !== parentDir ? [parentDir, childDir] : [parentDir]
   for (const directory of directories) {
-    let entries = entriesByDirectory.get(directory)
-    if (!entries) {
-      entries = readTranscriptDirectory(directory)
-      entriesByDirectory.set(directory, entries)
+    if (!entriesByDirectory.has(directory)) {
+      entriesByDirectory.set(directory, readTranscriptDirectory(directory))
     }
-    const fileName = entries.find((entry) => entry.endsWith(suffix))
+    const fileName = entriesByDirectory.get(directory)?.find((entry) => entry.endsWith(suffix))
     if (fileName) {
       return join(directory, fileName)
     }
   }
-  return undefined
+  return directories.some((directory) => !entriesByDirectory.get(directory))
+    ? 'unfetched'
+    : undefined
 }
 
-function readActivity(recordValue: JsonRecord):
+export function readSubagentActivity(recordValue: JsonRecord):
   | {
       id: string
       description?: string
@@ -155,13 +158,6 @@ function readChildModel(records: JsonRecord[]): string | undefined {
   return model
 }
 
-function normalizedTranscriptPath(transcriptPath: string | undefined): string | undefined {
-  const normalizedPath = transcriptPath?.trim()
-  return normalizedPath && isAbsolute(normalizedPath) && extname(normalizedPath) === '.jsonl'
-    ? normalizedPath
-    : undefined
-}
-
 function readTurnEnd(
   recordValue: JsonRecord
 ): { turnId: string; end: 'completed' | 'failed' } | undefined {
@@ -199,7 +195,8 @@ export function createCodexSubagentTranscriptState(): CodexSubagentTranscriptSta
     turnEnds: new Map(),
     subagents: new Map(),
     reviewerCursorsByPath: new Map(),
-    reviewersByPath: new Map()
+    reviewersByPath: new Map(),
+    unreadReviewerPaths: new Set()
   }
 }
 
@@ -237,10 +234,16 @@ export function reconcileCodexSubagentTranscript(
     state.subagents.clear()
     state.reviewerCursorsByPath.clear()
     state.reviewersByPath.clear()
+    state.unreadReviewerPaths.clear()
     // Why: a different rollout is a different session, so its predecessor's reviewer is void.
     state.approvalsReviewer = undefined
   }
-  const parentRecords = readJsonlCursor(state.parent, isCodexStatusTranscriptLine)
+  const parentRead = readJsonlCursor(state.parent, isCodexStatusTranscriptLine)
+  if (parentRead !== 'unfetched') {
+    markReviewerUnread(state, normalizedPath, parentRead === 'refused')
+  }
+  // Without a read for this position the parent has no news; only a failed read is unreadable.
+  const parentRecords = parentRead === 'unfetched' || parentRead === 'refused' ? [] : parentRead
   changed ||=
     Boolean(parentRecords?.length) ||
     (parentRecords === undefined && state.approvalsReviewer !== undefined)
@@ -267,7 +270,7 @@ export function reconcileCodexSubagentTranscript(
       }
       continue
     }
-    const activity = readActivity(recordValue)
+    const activity = readSubagentActivity(recordValue)
     if (!activity) {
       continue
     }
@@ -290,18 +293,19 @@ export function reconcileCodexSubagentTranscript(
       tracked.startedAt
     )
   }
-  const entriesByDirectory = new Map<string, string[]>()
+  const entriesByDirectory = new Map<string, string[] | undefined>()
   const now = Date.now()
   for (const [id, tracked] of state.subagents) {
-    if (!tracked.filePath) {
-      tracked.filePath = resolveChildTranscript(
-        normalizedPath,
-        id,
-        tracked.startedAt,
-        entriesByDirectory
-      )
+    const resolved =
+      tracked.filePath ??
+      resolveChildTranscript(normalizedPath, id, tracked.startedAt, entriesByDirectory)
+    tracked.filePath = resolved === 'unfetched' ? undefined : resolved
+    const records =
+      resolved === 'unfetched' ? resolved : readJsonlCursor(tracked, isCodexStatusTranscriptLine)
+    if (records === 'unfetched' || records === 'refused') {
+      setCodexSubagentModel(roster, id, tracked.model)
+      continue
     }
-    const records = readJsonlCursor(tracked, isCodexStatusTranscriptLine)
     changed ||= Boolean(records?.length)
     if (!records) {
       // Why: a rollout that never appears (or is deleted) has no completion event, so time-box it instead of leaking a working row.

@@ -1,3 +1,4 @@
+import { enterHookTranscriptTurn } from '../../../shared/agent-hook-listener/transcripts/hook-transcript-read-ahead'
 import { retainOpenCodeWriterTopology } from './cli-writer-observation'
 import { AgentHookAttributionDiagnostics } from '../../../shared/agent-hook-listener/state/agent-hook-attribution-diagnostics'
 import {
@@ -194,8 +195,16 @@ export abstract class AgentHookServerIngestNormalization extends AgentHookServer
       this.applySpoolHook(record, body)
     }
     const body = this.normalizeHookBodyPaneKeyAlias(buildSpoolHookBody(record))
-    const pending = this.checkHookOwner(record.source, body, answerBy)
-    return pending ? pending.then(apply) : apply()
+    const source = record.source
+    // Replay holds the pane's transcript turn from its rollout reads through apply, like a live hook.
+    return enterHookTranscriptTurn(this.state, source, body).then(async (turn) => {
+      try {
+        const pending = this.checkHookOwner(source, body, answerBy)
+        await (pending ? pending.then(() => turn.apply(apply)) : turn.apply(apply))
+      } finally {
+        turn.release()
+      }
+    })
   }
 
   private applySpoolHook(record: SpoolRecord, body: unknown): void {

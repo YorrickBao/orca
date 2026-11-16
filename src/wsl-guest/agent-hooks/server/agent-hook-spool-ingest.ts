@@ -1,4 +1,8 @@
 import {
+  enterHookTranscriptTurn,
+  type TranscriptTurn
+} from '../../../shared/agent-hook-listener/transcripts/hook-transcript-read-ahead'
+import {
   relayHookRootAcquisition,
   type RelayHookAdmissionOptions
 } from '../status/agent-hook-event-admission'
@@ -72,25 +76,37 @@ export function ingestRelayHookSpoolRecord(
       })
     }
   }
-  const pending = host.checkAgentPresence
-    ? checkHookOwnerPresence(
-        state,
-        record.source,
-        body,
-        env,
-        host.checkAgentPresence,
-        relayHookRootAcquisition(
-          host.readHookRootEvidence,
+  const admit = (turn: TranscriptTurn): Promise<void> | void => {
+    const pending = host.checkAgentPresence
+      ? checkHookOwnerPresence(
           state,
-          (event) =>
-            host.apply(event, source, hookBodyEnv(body), hookBodyVersion(body), {
-              checkPresence: false
-            }),
-          host.answerBy
+          source,
+          body,
+          env,
+          host.checkAgentPresence,
+          relayHookRootAcquisition(
+            host.readHookRootEvidence,
+            state,
+            (event) =>
+              host.apply(event, source, hookBodyEnv(body), hookBodyVersion(body), {
+                checkPresence: false
+              }),
+            host.answerBy
+          )
         )
-      )
-    : undefined
-  return pending ? pending.then(apply) : apply()
+      : undefined
+    return pending ? pending.then(() => turn.apply(apply)) : turn.apply(apply)
+  }
+  // Replay holds the pane's transcript turn from its rollout reads through apply, like a live hook.
+  return enterHookTranscriptTurn(state, source, body, (paneKey) =>
+    host.providerNormalization?.statusOf(source, paneKey) ?? state.lastStatusByPaneKey.get(paneKey)
+  ).then(async (turn) => {
+    try {
+      await admit(turn)
+    } finally {
+      turn.release()
+    }
+  })
 }
 
 /** Replay the relay's spool in order; `hostOf` binds each record's host. */

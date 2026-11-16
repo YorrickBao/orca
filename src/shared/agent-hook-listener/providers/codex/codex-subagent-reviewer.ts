@@ -1,6 +1,8 @@
-import { extname, isAbsolute } from 'node:path'
-
-import { readJsonlCursor, type JsonRecord } from './codex-rollout-jsonl-cursor'
+import {
+  normalizedTranscriptPath,
+  readJsonlCursor,
+  type JsonRecord
+} from './codex-rollout-jsonl-cursor'
 import { isCodexStatusTranscriptLine } from './codex-status-transcript-line'
 import type { CodexSubagentTranscriptState } from './codex-subagent-transcript'
 
@@ -8,13 +10,6 @@ const REVIEWER_CURSOR_MAX_PATHS = 64
 
 /** Codex's `approvals_reviewer`: `user` is a human, `auto_review` is Codex's own review agent. */
 export type CodexApprovalsReviewer = 'user' | 'auto_review'
-
-function normalizedTranscriptPath(transcriptPath: string | undefined): string | undefined {
-  const normalizedPath = transcriptPath?.trim()
-  return normalizedPath && isAbsolute(normalizedPath) && extname(normalizedPath) === '.jsonl'
-    ? normalizedPath
-    : undefined
-}
 
 function record(value: unknown): JsonRecord | undefined {
   return typeof value === 'object' && value !== null ? (value as JsonRecord) : undefined
@@ -42,6 +37,19 @@ export function readApprovalsReviewer(records: JsonRecord[]): CodexApprovalsRevi
   return reviewer
 }
 
+/** A read that could not run leaves the reviewer unknown until the next read, without forgetting it. */
+export function markReviewerUnread(
+  state: CodexSubagentTranscriptState,
+  path: string,
+  unread: boolean
+): void {
+  if (unread) {
+    state.unreadReviewerPaths.add(path)
+  } else {
+    state.unreadReviewerPaths.delete(path)
+  }
+}
+
 /** Whether the transcript's own review agent resolves this permission request. */
 export function codexTurnApprovalsAreAutoReviewed(
   state: CodexSubagentTranscriptState | undefined,
@@ -49,6 +57,9 @@ export function codexTurnApprovalsAreAutoReviewed(
 ): boolean {
   const normalizedPath = normalizedTranscriptPath(transcriptPath)
   if (!state || !normalizedPath) {
+    return false
+  }
+  if (state.unreadReviewerPaths.has(normalizedPath)) {
     return false
   }
   const reviewer =
@@ -80,6 +91,12 @@ export function reconcileCodexSubagentReviewer(
     state.reviewerCursorsByPath.set(normalizedPath, cursor)
   }
   const records = readJsonlCursor(cursor, isCodexStatusTranscriptLine)
+  if (records !== 'unfetched') {
+    markReviewerUnread(state, normalizedPath, records === 'refused')
+  }
+  if (records === 'unfetched' || records === 'refused') {
+    return
+  }
   if (records === undefined) {
     state.reviewerCursorsByPath.delete(normalizedPath)
     state.reviewersByPath.delete(normalizedPath)

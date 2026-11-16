@@ -1,3 +1,7 @@
+import {
+  enterHookTranscriptTurn,
+  type TranscriptTurn
+} from '../../../shared/agent-hook-listener/transcripts/hook-transcript-read-ahead'
 import { checkHookOwnerPresence } from '../../../shared/agent-hook-listener/presence/agent-hook-owner-presence'
 import type { HookRootEvidenceReader } from '../../../shared/agent-hook-listener/presence/hook-process-root-evidence'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -62,6 +66,7 @@ export async function handleRelayHookRequest(
     destroyedBySlowlorisCap = true
     req.destroy()
   })
+  let transcriptTurn: TranscriptTurn | undefined
   try {
     const pathname = new URL(req.url ?? '/', 'http://127.0.0.1').pathname
     if (pathname === CLAUDE_AGENT_VIEW_PATH) {
@@ -89,6 +94,10 @@ export async function handleRelayHookRequest(
       res.end()
       return
     }
+    // Rollout reads leave the event loop; holding this pane's turn through apply keeps its hooks in arrival order.
+    transcriptTurn = await enterHookTranscriptTurn(options.state, source, hookBody, (paneKey) =>
+      options.providerNormalization.statusOf(source, paneKey)
+    )
     await checkHookOwnerPresence(
       options.state,
       source,
@@ -107,19 +116,15 @@ export async function handleRelayHookRequest(
       return
     }
     let admittedOpenCodeTuiOwner = false
-    const event = options.providerNormalization.normalize(
-      options.state,
-      source,
-      hookBody,
-      options.env,
-      {
+    const event = transcriptTurn.apply(() =>
+      options.providerNormalization.normalize(options.state, source, hookBody, options.env, {
         deferCompactOwnershipToClient: true,
         admitOpenCodeTui: (identity) => {
           const admission = admitRelayOpenCodeTui(options, identity)
           admittedOpenCodeTuiOwner = admission === true
           return admission
         }
-      }
+      })
     )
     if (source === 'muse' && !event) {
       options.retryScheduler.rearmIgnoredMuseHook(hookBody)
@@ -140,6 +145,7 @@ export async function handleRelayHookRequest(
         options.retryScheduler.armClaudeOwedNotificationExpiry(source, stored.paneKey, env, version)
       }
     }
+    transcriptTurn.release()
     res.writeHead(204)
     res.end()
   } catch (err) {
@@ -153,6 +159,8 @@ export async function handleRelayHookRequest(
     )
     res.writeHead(204)
     res.end()
+  } finally {
+    transcriptTurn?.release()
   }
 }
 

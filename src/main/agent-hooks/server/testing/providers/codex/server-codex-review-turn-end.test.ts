@@ -63,10 +63,15 @@ describe('Codex turn completion without Stop', () => {
 
     appendFileSync(childPath, `${reviewRecords[1]}\n`)
     await vi.advanceTimersByTimeAsync(5_000)
-    expect(desktop.getStatusSnapshot()[0]).toMatchObject({
-      state: 'done',
-      mainAgent: { state: 'done' }
-    })
+    // Rollout reads finish off the event loop after the poll fires.
+    await vi.waitFor(
+      () =>
+        expect(desktop.getStatusSnapshot()[0]).toMatchObject({
+          state: 'done',
+          mainAgent: { state: 'done' }
+        }),
+      { interval: 1 }
+    )
     // Desktops that predate host-owned turn verdicts still recognize a labelled Stop.
     expect(published.at(-1)).toBe('Stop')
 
@@ -90,6 +95,8 @@ describe('Codex turn completion without Stop', () => {
     await hook({ hook_event_name: 'SessionStart', source: 'compact', transcript_path: childPath })
     appendFileSync(childPath, event({ type: 'task_complete', turn_id: 'next-turn' }))
     await vi.advanceTimersByTimeAsync(5_000)
-    expect(published.slice(-2)).toEqual(['Stop', 'SessionStart'])
+    await vi.waitFor(() => expect(published.slice(-2)).toEqual(['Stop', 'SessionStart']), {
+      interval: 1
+    })
   })
 })

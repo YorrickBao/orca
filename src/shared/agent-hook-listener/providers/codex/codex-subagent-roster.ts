@@ -1,5 +1,3 @@
-import { statSync } from 'node:fs'
-
 import {
   AGENT_MODEL_MAX_LENGTH,
   AGENT_STATUS_TOOL_INPUT_MAX_LENGTH,
@@ -93,18 +91,18 @@ export function enrichCodexSubagentIdentity(
   if ((child.identityRetryAt ?? 0) > Date.now()) {
     return false
   }
-  const missKey = `${transcriptPath}:${transcriptFileSize(transcriptPath)}`
-  if (child.identityMissKey === missKey) {
+  const read = readCodexSubagentIdentity(transcriptPath, id.trim())
+  if (read === 'unfetched') {
     return false
   }
-  const identity = readCodexSubagentIdentity(transcriptPath, id.trim())
-  if (identity === 'unreadable') {
+  if (read === 'unreadable') {
     child.identityRetryAt = Date.now() + IDENTITY_IO_RETRY_MS
     return false
   }
   child.identityRetryAt = undefined
+  const { identity } = read
   if (identity === 'pending') {
-    child.identityMissKey = missKey
+    child.identityMissKey = `${transcriptPath}:${read.size}`
     return false
   }
   child.identityPendingPath = undefined
@@ -146,14 +144,32 @@ export function hasPendingCodexSubagentIdentity(roster: CodexSubagentRoster | un
 const IDENTITY_RETRIES_PER_POLL = 8
 const identityRetryCursors = new WeakMap<CodexSubagentRoster, number>()
 
-/** Retry unnamed children's own rollouts a few per poll, taking turns; a relay restart can leave no parent transcript to drive this. */
-export function retryPendingCodexSubagentIdentities(roster: CodexSubagentRoster): boolean {
+function identityRetryTurn(roster: CodexSubagentRoster): {
+  start: number
+  turn: [string, TrackedCodexSubagent][]
+} {
   const pending = [...roster].filter(([, child]) => child.identityPendingPath !== undefined)
   const start = (identityRetryCursors.get(roster) ?? 0) % Math.max(pending.length, 1)
   const turn = [...pending.slice(start), ...pending.slice(0, start)].slice(
     0,
     IDENTITY_RETRIES_PER_POLL
   )
+  return { start, turn }
+}
+
+/** The rollouts the next identity retry reads, so a read-ahead fetches the same ones. */
+export function pendingCodexSubagentIdentityPaths(roster: CodexSubagentRoster): string[] {
+  const now = Date.now()
+  return identityRetryTurn(roster).turn.flatMap(([, child]) =>
+    child.identityPendingPath && (child.identityRetryAt ?? 0) <= now
+      ? [child.identityPendingPath]
+      : []
+  )
+}
+
+/** Retry unnamed children's own rollouts a few per poll, taking turns; a relay restart can leave no parent transcript to drive this. */
+export function retryPendingCodexSubagentIdentities(roster: CodexSubagentRoster): boolean {
+  const { start, turn } = identityRetryTurn(roster)
   identityRetryCursors.set(roster, start + turn.length)
   let changed = false
   for (const [id, child] of turn) {
@@ -165,14 +181,6 @@ export function retryPendingCodexSubagentIdentities(roster: CodexSubagentRoster)
     changed = enrichCodexSubagentIdentity(roster, id, child.identityPendingPath) || changed
   }
   return changed
-}
-
-function transcriptFileSize(transcriptPath: string): number | null {
-  try {
-    return statSync(transcriptPath).size
-  } catch {
-    return null
-  }
 }
 
 /** Update only an existing child’s model, preserving lifecycle so late discovery cannot resurrect finished children. */

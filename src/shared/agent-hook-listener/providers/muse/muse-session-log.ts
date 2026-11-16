@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -7,6 +6,7 @@ import {
   type JsonlCursor,
   type JsonRecord
 } from '../codex/codex-rollout-jsonl-cursor'
+import { fetchTranscriptTail, peekLocatedTranscriptPath, TranscriptReads, transcriptFileExists } from '../../transcripts/transcript-read-ahead'
 
 // Muse stores local-date shards under <XDG_DATA_HOME>/muse/sessions (default ~/.local/share/muse/sessions): YYYY/MM/DD/<uuid>/session.jsonl. No upstream override exists.
 export function resolveMuseSessionsDir(override?: string): string {
@@ -28,10 +28,11 @@ function dayParts(date: Date, utc: boolean): string[] {
 }
 
 /** Locates a live session's log from its UUIDv7 id, whose timestamp names the date shard. */
-export function findMuseSessionLogPath(
+export async function findMuseSessionLogPath(
   sessionId: string,
-  sessionsDir = resolveMuseSessionsDir()
-): string | undefined {
+  sessionsDir = resolveMuseSessionsDir(),
+  reads = new TranscriptReads('poll')
+): Promise<string | undefined> {
   const match = UUID_V7.exec(sessionId)
   if (!match) {
     return undefined
@@ -46,7 +47,7 @@ export function findMuseSessionLogPath(
     }
   }
   for (const candidate of candidates) {
-    if (existsSync(candidate)) {
+    if (await transcriptFileExists(reads, candidate)) {
       return candidate
     }
   }
@@ -71,7 +72,11 @@ export type MuseSessionLogState = {
 const USER_INPUT_PROMPT_MARKER = '"user_input_prompt_'
 
 export function createMuseSessionLogState(sessionId: string): MuseSessionLogState {
-  return { sessionId, cursor: { offset: 0, carry: '' }, pending: new Map() }
+  return {
+    sessionId,
+    cursor: { offset: 0, carry: '' },
+    pending: new Map()
+  }
 }
 
 /** Muse batches some records into a `retained_frame` whose `children[].record_json` hold them as strings. */
@@ -118,16 +123,35 @@ function applyUserInputRecord(log: MuseSessionLogState, entry: JsonRecord): void
   }
 }
 
+/** Locates the session's log and reads its new bytes off the event loop, for `readMusePendingUserInput`. */
+export async function prefetchMuseSessionLog(
+  reads: TranscriptReads,
+  sessionId: string,
+  log: MuseSessionLogState | undefined,
+  sessionsDir?: string
+): Promise<void> {
+  const current = log?.sessionId === sessionId ? log : undefined
+  let filePath = current?.cursor.filePath
+  if (!filePath) {
+    // Why: the path is located afresh until the session's state holds it, so a moved log is found again.
+    filePath = await findMuseSessionLogPath(sessionId, sessionsDir, reads)
+    if (!filePath) {
+      return
+    }
+    reads.locatedPaths.set(sessionId, filePath)
+  }
+  await fetchTranscriptTail(reads, filePath, current?.cursor.filePath ? current.cursor.offset : 0)
+}
+
 /** Advances the log and returns the newest unanswered `request_user_input` prompt of `turnId`'s run. */
 export function readMusePendingUserInput(
   log: MuseSessionLogState,
-  turnId: string | undefined,
-  sessionsDir?: string
+  turnId: string | undefined
 ): MusePendingUserInput | undefined {
-  log.cursor.filePath ??= findMuseSessionLogPath(log.sessionId, sessionsDir)
+  log.cursor.filePath ??= peekLocatedTranscriptPath(log.sessionId)
   // Why: most log lines are large model/tool records; parse only the two event kinds we read.
   const lines = readJsonlCursor(log.cursor, (line) => line.includes(USER_INPUT_PROMPT_MARKER))
-  for (const line of lines ?? []) {
+  for (const line of lines === 'unfetched' || lines === 'refused' ? [] : (lines ?? [])) {
     for (const entry of unwrapMuseLogRecords(line)) {
       applyUserInputRecord(log, entry)
     }

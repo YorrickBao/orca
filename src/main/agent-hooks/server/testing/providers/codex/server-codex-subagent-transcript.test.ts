@@ -83,13 +83,19 @@ describe('AgentHookServer Codex subagent transcript polling', () => {
 
       appendFileSync(parentPath, spawnLine(SECOND_CHILD_ID, '/root/perf_audit'))
       await vi.advanceTimersByTimeAsync(1_000)
-      expect(server.getStatusSnapshot()[0]?.subagents).toHaveLength(2)
+      // Rollout reads finish off the event loop after the poll fires.
+      await vi.waitFor(() => expect(server.getStatusSnapshot()[0]?.subagents).toHaveLength(2), {
+        interval: 1
+      })
 
       const complete = line({ type: 'event_msg', payload: { type: 'task_complete' } })
       appendFileSync(childPath, complete)
       appendFileSync(secondChildPath, complete)
       await vi.advanceTimersByTimeAsync(1_000)
-      expect(server.getStatusSnapshot()[0]?.subagents).toBeUndefined()
+      // Rollout reads finish off the event loop after the poll fires.
+      await vi.waitFor(() => expect(server.getStatusSnapshot()[0]?.subagents).toBeUndefined(), {
+        interval: 1
+      })
     } finally {
       server.stop()
     }
@@ -137,7 +143,10 @@ describe('AgentHookServer Codex subagent transcript polling', () => {
 
       appendFileSync(childPath, line({ type: 'event_msg', payload: { type: 'task_complete' } }))
       await vi.advanceTimersByTimeAsync(1_000)
-      expect(server.getStatusSnapshot()[0]?.subagents).toBeUndefined()
+      // Rollout reads finish off the event loop after the poll fires.
+      await vi.waitFor(() => expect(server.getStatusSnapshot()[0]?.subagents).toBeUndefined(), {
+        interval: 1
+      })
     } finally {
       server.stop()
     }

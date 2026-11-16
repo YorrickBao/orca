@@ -1,17 +1,11 @@
+import { extname, isAbsolute } from 'node:path'
 import {
-  closeSync,
-  constants,
-  fstatSync,
-  openSync,
-  readSync,
-  readdirSync,
-  statSync,
-  type Stats
-} from 'node:fs'
-
-const TRANSCRIPT_READ_MAX_BYTES = 1024 * 1024
-const TRANSCRIPT_LINE_MAX_BYTES = 256 * 1024
-const TRANSCRIPT_DIRECTORY_MAX_ENTRIES = 4096
+  peekTranscriptDirectory,
+  takeTranscriptHead,
+  takeTranscriptTail,
+  TRANSCRIPT_LINE_MAX_BYTES,
+  type TranscriptTail
+} from '../../transcripts/transcript-read-ahead'
 
 export type JsonlCursor = {
   filePath?: string
@@ -21,84 +15,83 @@ export type JsonlCursor = {
 
 export type JsonRecord = Record<string, unknown>
 
+/** An absolute `.jsonl` rollout path, trimmed, or undefined. */
+export function normalizedTranscriptPath(transcriptPath: string | undefined): string | undefined {
+  const normalizedPath = transcriptPath?.trim()
+  return normalizedPath && isAbsolute(normalizedPath) && extname(normalizedPath) === '.jsonl'
+    ? normalizedPath
+    : undefined
+}
+
 export function record(value: unknown): JsonRecord | undefined {
   return typeof value === 'object' && value !== null ? (value as JsonRecord) : undefined
 }
 
-/** 'pending' while the file or its first line is unwritten; 'unreadable' on other I/O failures; undefined once the line is final. */
+/** 'pending' while the file or its first line is unwritten; 'unreadable' on other I/O failures; 'unfetched' until a read-ahead ran; undefined once the line is final. */
 export function readJsonlFirstRecord(
   filePath: string
-): JsonRecord | 'pending' | 'unreadable' | undefined {
-  let fd: number | undefined
+):
+  | { size: number; record: JsonRecord | 'pending' | undefined }
+  | 'pending'
+  | 'unreadable'
+  | 'unfetched' {
+  const head = takeTranscriptHead(filePath)
+  if (head === undefined) {
+    return 'unfetched'
+  }
+  if (head === 'missing') {
+    return 'pending'
+  }
+  if (head === 'unreadable') {
+    return head
+  }
+  const newline = head.bytes.indexOf(0x0a)
+  if (newline === -1) {
+    return {
+      size: head.size,
+      record: head.bytes.length < TRANSCRIPT_LINE_MAX_BYTES ? 'pending' : undefined
+    }
+  }
   try {
-    // Nonblocking open prevents a FIFO from stalling hook handling before the descriptor check.
-    fd = openSync(
-      filePath,
-      constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NONBLOCK)
-    )
-    if (!fstatSync(fd).isFile()) {
-      return undefined
-    }
-    const buffer = Buffer.allocUnsafe(TRANSCRIPT_LINE_MAX_BYTES)
-    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0)
-    const newline = buffer.subarray(0, bytesRead).indexOf(0x0a)
-    if (newline === -1) {
-      return bytesRead < buffer.length ? 'pending' : undefined
-    }
-    return record(JSON.parse(buffer.toString('utf8', 0, newline)))
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      return undefined
-    }
-    return error instanceof Error && 'code' in error && error.code === 'ENOENT'
-      ? 'pending'
-      : 'unreadable'
-  } finally {
-    if (fd !== undefined) {
-      closeSync(fd)
-    }
+    return { size: head.size, record: record(JSON.parse(head.bytes.toString('utf8', 0, newline))) }
+  } catch {
+    return { size: head.size, record: undefined }
   }
 }
 
-/** Undefined distinguishes unreadable/vanished files from no new lines; lineFilter rejects raw substrings before JSON.parse. */
+/** Undefined distinguishes unreadable/vanished files from no new lines; 'unfetched' means no read-ahead ran for this position and 'refused' that it could not run; lineFilter rejects raw substrings before JSON.parse. */
 export function readJsonlCursor(
   cursor: JsonlCursor,
   lineFilter?: (line: string) => boolean
-): JsonRecord[] | undefined {
+): JsonRecord[] | undefined | 'unfetched' | 'refused' {
   if (!cursor.filePath) {
     return undefined
   }
-  let stats: Stats
-  try {
-    stats = statSync(cursor.filePath)
-  } catch {
+  const tail = takeTranscriptTail(cursor.filePath, cursor.offset)
+  return tail === undefined || tail === 'refused'
+    ? (tail ?? 'unfetched')
+    : decodeJsonlTail(cursor, tail, lineFilter)
+}
+
+/** Advances `cursor` over fetched bytes with the carry, skip-prefix and truncation rules; a planner passes a copy to look ahead. */
+export function decodeJsonlTail(
+  cursor: JsonlCursor,
+  tail: Exclude<TranscriptTail, 'refused'>,
+  lineFilter?: (line: string) => boolean
+): JsonRecord[] | undefined {
+  if (tail === 'missing') {
     return undefined
   }
-  if (!stats.isFile()) {
-    return undefined
-  }
-  if (stats.size < cursor.offset) {
+  if (tail.size < cursor.offset) {
     cursor.offset = 0
     cursor.carry = ''
   }
-  if (stats.size === cursor.offset) {
+  if (tail.size === cursor.offset) {
     return []
   }
-  const bytesToRead = Math.min(stats.size - cursor.offset, TRANSCRIPT_READ_MAX_BYTES)
-  const start = stats.size - cursor.offset > bytesToRead ? stats.size - bytesToRead : cursor.offset
-  const buffer = Buffer.allocUnsafe(bytesToRead)
-  let bytesRead = 0
-  let fd: number | undefined
-  try {
-    fd = openSync(cursor.filePath, 'r')
-    bytesRead = readSync(fd, buffer, 0, bytesToRead, start)
-  } catch {
-    return undefined
-  } finally {
-    if (fd !== undefined) {
-      closeSync(fd)
-    }
-  }
+  const start = tail.start
+  const bytesRead = tail.bytes.length
+  const buffer = tail.bytes
   const skippedPrefix = start !== cursor.offset
   const content = `${skippedPrefix ? '' : cursor.carry}${buffer.toString('utf8', 0, bytesRead)}`
   const lines = content.split('\n')
@@ -127,15 +120,7 @@ export function readJsonlCursor(
   return records
 }
 
-export function readTranscriptDirectory(directory: string): string[] {
-  let entries: string[]
-  try {
-    entries = readdirSync(directory)
-  } catch {
-    return []
-  }
-  if (entries.length > TRANSCRIPT_DIRECTORY_MAX_ENTRIES) {
-    entries = entries.slice(-TRANSCRIPT_DIRECTORY_MAX_ENTRIES)
-  }
-  return entries
+/** Undefined until a read-ahead listed the directory. */
+export function readTranscriptDirectory(directory: string): string[] | undefined {
+  return peekTranscriptDirectory(directory)
 }

@@ -2,7 +2,6 @@ import {
   AgentHookStartup,
   listenForAgentHooks
 } from '../../../shared/agent-hook-listener/transport/agent-hook-startup'
-import { parsePaneKey } from '../../../shared/workspace-layout/stable-pane-id'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 
@@ -136,58 +135,13 @@ export abstract class AgentHookServerLifecycle extends AgentHookServerStatusHook
           res.end()
           return
         }
-        await this.checkHookOwner(source, aliasedBody)
-        if (!isStatusCurrent()) {
+        const admitted = await this.ingestLocalHookInTurn(source, aliasedBody, isStatusCurrent)
+        if (!admitted) {
           res.writeHead(204)
           res.end()
           return
         }
-        const normalized = this.normalizeLocalHookPayload(source, aliasedBody)
-        if (source === 'muse' && !normalized.event) {
-          this.rearmIgnoredMuseHook(aliasedBody)
-        }
-        const statusDisposition = normalized.event
-          ? this.getAgentStatusDisposition(normalized.event.paneKey, {
-              source,
-              hookEventName: normalized.event.hookEventName,
-              isReplay: normalized.event.isReplay,
-              hasExplicitPrompt: normalized.event.hasExplicitPrompt,
-              launchToken: normalized.event.launchToken
-            })
-          : 'suppress'
-        let toolCallOwner: typeof normalized.event = null
-        if (normalized.event && statusDisposition !== 'suppress') {
-          const restartedAuthority =
-            statusDisposition === 'restart' && source === 'omp'
-              ? this.restoreRetiredStatusRestart(normalized.event.paneKey)
-              : undefined
-          const event =
-            statusDisposition === 'restart'
-              ? {
-                  ...normalized.event,
-                  launchToken: undefined,
-                  ...(restartedAuthority
-                    ? {
-                        ...restartedAuthority,
-                        tabId: parsePaneKey(restartedAuthority.paneKey)?.tabId
-                      }
-                    : {})
-                }
-              : normalized.event
-          if (statusDisposition === 'restart') {
-            // A new session must not inherit the retired one's observation order.
-            this.observations.rebind(event.paneKey)
-          }
-          this.recordCurrentAuthorityObservation(event)
-          toolCallOwner = event
-          const enriched = this.applyObservedLocalHook(event, normalized.onAccepted)
-          if (enriched) {
-            this.checkAgentPresenceAfterHook(event, enriched)
-            this.scheduleAssistantMessageRetry(source, aliasedBody, enriched)
-            this.scheduleTranscriptPoll(source, aliasedBody, enriched)
-          }
-        }
-        await this.respondToHook(req, res, source, aliasedBody, toolCallOwner)
+        await this.respondToHook(req, res, source, aliasedBody, admitted.toolCallOwner)
       } catch (error) {
         if (pathname === OPENCODE_STARTUP_PROMPT_CLAIM_PATH) {
           if (isHookRequestTruncatedError(error) && !destroyedBySlowlorisCap) {

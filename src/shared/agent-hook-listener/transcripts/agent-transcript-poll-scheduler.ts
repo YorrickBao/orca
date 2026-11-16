@@ -17,6 +17,9 @@ type TranscriptWakeup<T> = {
   delayMs: number
   eventPending: boolean
   initialCheck: boolean
+  /** An asynchronous poll is reading; a deadline reached meanwhile runs once after it. */
+  running: boolean
+  overdue: boolean
 }
 
 /** One deadline timer; root-only sessions use targeted file events with a sparse safety probe. */
@@ -26,23 +29,52 @@ export class AgentTranscriptPollScheduler<T> {
 
   constructor(
     private readonly delayMs: number,
-    private readonly onDue: (key: string, value: T) => void
+    private readonly onDue: (key: string, value: T) => Promise<void> | void
   ) {
     this.deadlines = new CodexSubagentPollScheduler(delayMs, (key, entry) => {
       if (this.entries.get(key) !== entry) {
         return
       }
-      entry.scheduled = false
-      entry.eventPending = false
-      entry.initialCheck = false
-      try {
-        this.onDue(key, entry.value)
-      } finally {
-        if (this.entries.get(key) === entry && !entry.scheduled) {
-          this.clear(key)
-        }
+      if (entry.running) {
+        entry.scheduled = false
+        entry.overdue = true
+        return
       }
+      this.run(key, entry)
     })
+  }
+
+  private run(key: string, entry: TranscriptWakeup<T>): void {
+    entry.scheduled = false
+    entry.eventPending = false
+    entry.initialCheck = false
+    const settle = (): void => {
+      entry.running = false
+      if (this.entries.get(key) !== entry) {
+        return
+      }
+      if (entry.overdue) {
+        entry.overdue = false
+        this.deadlines.clear(key)
+        this.run(key, entry)
+      } else if (!entry.scheduled) {
+        this.clear(key)
+      }
+    }
+    let pending: Promise<void> | undefined
+    try {
+      const result = this.onDue(key, entry.value)
+      pending = result instanceof Promise ? result : undefined
+    } finally {
+      if (!pending) {
+        settle()
+      }
+    }
+    if (pending) {
+      // An asynchronous read keeps the entry and its watch until it re-arms or settles.
+      entry.running = true
+      void pending.then(settle, settle)
+    }
   }
 
   /** An explicit `delayMs` shorter than the pending one (a Muse hook ending a quiet back-off) replaces it. */
@@ -61,7 +93,9 @@ export class AgentTranscriptPollScheduler<T> {
         scheduled: false,
         delayMs: this.delayMs,
         eventPending: false,
-        initialCheck: true
+        initialCheck: true,
+        running: false,
+        overdue: false
       }
       this.entries.set(key, entry)
       if (filePath && !isWslUncPath(filePath)) {

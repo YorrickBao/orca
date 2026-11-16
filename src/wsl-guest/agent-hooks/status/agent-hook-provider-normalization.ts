@@ -95,6 +95,11 @@ export class RelayProviderHookNormalization {
     return event
   }
 
+  /** The status row a provider's hooks normalize against, which a transcript read-ahead predicts from. */
+  statusOf(source: AgentHookSource, paneKey: string): AgentHookEventPayload | undefined {
+    return this.states.get(source)?.lastStatusByPaneKey.get(paneKey)
+  }
+
   clearPane(paneKey: string): void {
     for (const state of this.states.values()) {
       clearPaneCacheState(state, paneKey)
