@@ -55,10 +55,13 @@ export function ingestRelayHookSpoolRecord(
   }
   const body = buildSpoolHookBody(record)
   const source = record.source
-  const apply = () => {
+  const assertCurrent = () => {
     if (host.isCurrent && !host.isCurrent()) {
       throw new Error('Relay hook spool replay interrupted')
     }
+  }
+  const apply = () => {
+    assertCurrent()
     if (!isAgentHookSource(record.source)) {
       return
     }
@@ -107,6 +110,7 @@ export function ingestRelayHookSpoolRecord(
       state.lastStatusByPaneKey.get(paneKey)
   ).then(async (turn) => {
     try {
+      assertCurrent()
       await admit(turn)
     } finally {
       turn.release()

@@ -1,15 +1,56 @@
-// Run with node --import tsx; pass the pre-change cursor module as the first argument.
+// Run with node; optionally pass a pre-change cursor module instead of the port's parent commit.
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import fsPromises from 'node:fs/promises'
-import { syncBuiltinESMExports } from 'node:module'
+import { registerHooks, stripTypeScriptTypes, syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import { setTimeout as delay } from 'node:timers/promises'
+import ts from 'typescript-api'
 
-const baseline = await import(pathToFileURL(process.argv[2]).href)
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.startsWith('.') && !/\.[cm]?[jt]s$/.test(specifier) && context.parentURL) {
+      const candidate = new URL(`${specifier}.ts`, context.parentURL)
+      if (fs.existsSync(fileURLToPath(candidate))) {
+        return { url: candidate.href, shortCircuit: true }
+      }
+    }
+    return nextResolve(specifier, context)
+  },
+  load(url, context, nextLoad) {
+    if (url.endsWith('.ts')) {
+      return {
+        format: 'module',
+        source: ts.transpileModule(fs.readFileSync(fileURLToPath(url), 'utf8'), {
+          compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext }
+        }).outputText,
+        shortCircuit: true
+      }
+    }
+    return nextLoad(url, context)
+  }
+})
+
+const baseline = process.argv[2]
+  ? await import(pathToFileURL(process.argv[2]).href)
+  : await import(
+      `data:text/javascript;base64,${Buffer.from(
+        stripTypeScriptTypes(
+          execFileSync(
+            'git',
+            [
+              'show',
+              '237a1992d13^:src/shared/agent-hook-listener/providers/codex/codex-rollout-jsonl-cursor.ts'
+            ],
+            { cwd: import.meta.dirname, encoding: 'utf8' }
+          )
+        )
+      ).toString('base64')}`
+    )
 const { createHookListenerState } =
   await import('../../../src/shared/agent-hook-listener/listener-state.ts')
 const { normalizeHookPayload } =
@@ -22,7 +63,7 @@ const { enterHookTranscriptTurn, enterTranscriptPollTurn } =
   await import('../../../src/shared/agent-hook-listener/transcripts/hook-transcript-read-ahead.ts')
 
 const root = fs.mkdtempSync(join(tmpdir(), 'codex-poll-io-bench-'))
-const line = (payload) => JSON.stringify(payload) + '\n'
+const line = (payload) => `${JSON.stringify(payload)}\n`
 const started = line({ type: 'event_msg', payload: { type: 'task_started' } })
 const filler = line({ type: 'response_item', payload: { text: 'x'.repeat(16 * 1024) } })
 const panes = []
@@ -74,25 +115,32 @@ for (let pane = 0; pane < 50; pane++) {
 const sleepWord = new Int32Array(new SharedArrayBuffer(4))
 let latency = 0
 let syncCalls = 0
+let asyncStats = 0
 const restore = []
-for (const name of ['statSync', 'openSync', 'readSync', 'closeSync']) {
+for (const name of Object.keys(fs).filter(
+  (name) => name.endsWith('Sync') && typeof fs[name] === 'function'
+)) {
   const original = fs[name]
   fs[name] = (...args) => {
     syncCalls++
-    if (name === 'statSync' && latency) Atomics.wait(sleepWord, 0, 0, latency)
+    if (name === 'statSync' && latency) {
+      Atomics.wait(sleepWord, 0, 0, latency)
+    }
     return original(...args)
   }
   restore.push(() => {
     fs[name] = original
   })
 }
-syncBuiltinESMExports()
 const open = fsPromises.open
 fsPromises.open = async (...args) => {
   const handle = await open(...args)
   const stat = handle.stat.bind(handle)
   handle.stat = async (...statArgs) => {
-    if (latency) await delay(latency)
+    asyncStats++
+    if (latency) {
+      await delay(latency)
+    }
     return stat(...statArgs)
   }
   return handle
@@ -100,13 +148,16 @@ fsPromises.open = async (...args) => {
 restore.push(() => {
   fsPromises.open = open
 })
+syncBuiltinESMExports()
 
 async function measure(mode, count, slowStatMs) {
   latency = slowStatMs
   const selected = panes.slice(0, count)
   // Model one append arriving between polls; setup is excluded from the measurement.
   for (const pane of selected) {
-    for (const path of pane.paths) fs.appendFileSync(path, started)
+    for (const path of pane.paths) {
+      fs.appendFileSync(path, started)
+    }
   }
   const oldCursors = selected.flatMap((pane) =>
     pane.paths.map((path) => ({
@@ -126,10 +177,13 @@ async function measure(mode, count, slowStatMs) {
   maxLag = 0
   previous = performance.now()
   syncCalls = 0
+  asyncStats = 0
   const start = performance.now()
   if (mode === 'old') {
     // The old poll reads the root and every tracked child synchronously.
-    for (const cursor of oldCursors) baseline.readJsonlCursor(cursor)
+    for (const cursor of oldCursors) {
+      baseline.readJsonlCursor(cursor)
+    }
   } else {
     await Promise.all(
       selected.map(async (pane) => {
@@ -151,6 +205,9 @@ async function measure(mode, count, slowStatMs) {
   clearInterval(heartbeat)
   const row = {
     mode,
+    filesystem: slowStatMs
+      ? 'timer-injected stat latency over real files'
+      : 'real disk, no injection (warm cache)',
     panes: count,
     childrenPerPane: 8,
     slowStatMs,
@@ -159,17 +216,24 @@ async function measure(mode, count, slowStatMs) {
     syncCalls
   }
   console.log(JSON.stringify(row))
-  if (mode === 'new') assert.equal(syncCalls, 0)
+  if (mode === 'new') {
+    assert.equal(syncCalls, 0)
+    assert.ok(asyncStats >= count * 9, 'every tracked rollout must actually be read')
+  }
 }
 
 try {
   for (const slowStatMs of [0, 20]) {
     for (const count of [5, 50]) {
-      for (const mode of ['old', 'new']) await measure(mode, count, slowStatMs)
+      for (const mode of ['old', 'new']) {
+        await measure(mode, count, slowStatMs)
+      }
     }
   }
 } finally {
-  for (const undo of restore) undo()
+  for (const undo of restore) {
+    undo()
+  }
   syncBuiltinESMExports()
   fs.rmSync(root, { recursive: true, force: true })
 }

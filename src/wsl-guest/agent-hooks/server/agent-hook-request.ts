@@ -98,6 +98,11 @@ export async function handleRelayHookRequest(
     transcriptTurn = await enterHookTranscriptTurn(options.state, source, hookBody, (paneKey) =>
       options.providerNormalization.statusOf(source, paneKey)
     )
+    if (!options.isCurrent()) {
+      res.writeHead(204)
+      res.end()
+      return
+    }
     await checkHookOwnerPresence(
       options.state,
       source,

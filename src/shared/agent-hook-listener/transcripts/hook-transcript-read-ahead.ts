@@ -24,11 +24,26 @@ export type TranscriptTurn = {
   release: () => void
 }
 
-const turns = new WeakMap<HookListenerState, Map<string, Promise<void>>>()
+type TranscriptTurns = {
+  panes: Map<string, Promise<void>>
+  pending: Set<() => void>
+}
+
+const turns = new WeakMap<HookListenerState, TranscriptTurns>()
 
 const noTurn: TranscriptTurn = {
   apply: (step) => applyTranscriptReads(undefined, step),
   release: () => {}
+}
+
+/** Detach the discarded listener generation and answer its queued hooks without waiting on an old owner probe. */
+export function discardHookTranscriptTurns(state: HookListenerState): void {
+  const generation = turns.get(state)
+  turns.delete(state)
+  for (const discard of generation?.pending ?? []) {
+    discard()
+  }
+  generation?.pending.clear()
 }
 
 /** Waits until this pane's earlier hooks and polls applied, then reads; the caller applies and releases. */
@@ -38,20 +53,21 @@ function enterPaneTranscriptTurn(
   read: ((reads: TranscriptReads) => Promise<void>) | undefined,
   priority: TranscriptReadPriority
 ): Promise<TranscriptTurn> | undefined {
-  let panes = turns.get(state)
-  const previous = panes?.get(paneKey)
+  let generation = turns.get(state)
+  const previous = generation?.panes.get(paneKey)
   if (!read && !previous) {
     return undefined
   }
-  if (!panes) {
-    panes = new Map()
-    turns.set(state, panes)
+  if (!generation) {
+    generation = { panes: new Map(), pending: new Set() }
+    turns.set(state, generation)
   }
   let release = (): void => {}
   const released = new Promise<void>((resolve) => {
     release = resolve
   })
-  const owner = panes
+  const currentGeneration = generation
+  const owner = generation.panes
   owner.set(paneKey, released)
   void released.then(() => {
     if (owner.get(paneKey) === released) {
@@ -64,10 +80,27 @@ function enterPaneTranscriptTurn(
     release
   }
   // A read failure must not drop the hook; normalization keeps its existing unreadable-file behavior.
-  return (previous ?? Promise.resolve())
-    .then(() => (read ? admitTranscriptRound(reads, () => read(reads)) : undefined))
+  const pending = (previous ?? Promise.resolve())
+    .then(() =>
+      read && turns.get(state) === currentGeneration
+        ? admitTranscriptRound(reads, () =>
+            turns.get(state) === currentGeneration ? read(reads) : Promise.resolve()
+          )
+        : undefined
+    )
     .catch(() => undefined)
     .then(() => turn)
+  return new Promise((resolve) => {
+    const discard = (): void => {
+      release()
+      resolve(noTurn)
+    }
+    currentGeneration.pending.add(discard)
+    void pending.then((ready) => {
+      currentGeneration.pending.delete(discard)
+      resolve(ready)
+    })
+  })
 }
 
 function prefetchPaneTranscripts(

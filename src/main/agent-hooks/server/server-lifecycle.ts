@@ -15,6 +15,7 @@ import { resolveHookSource } from '../../../shared/agent-hook-listener/source-ro
 import { HOOK_REQUEST_SLOWLORIS_MS } from '../../../shared/agent-hook-listener/listener-limits'
 import { isHookRequestTruncatedError } from '../../../shared/agent-hook-listener/transport/agent-hook-transport-interference'
 import { clearAllListenerCaches } from '../../../shared/agent-hook-listener/listener-state'
+import { discardHookTranscriptTurns } from '../../../shared/agent-hook-listener/transcripts/hook-transcript-read-ahead'
 import { trackEmptyPaneKeyHook } from './server-transport-rules'
 import { AgentHookServerStatusHookLifecycle } from './server-status-hook-lifecycle'
 import { OPENCODE_STARTUP_PROMPT_CLAIM_PATH } from '../../../shared/agent-launch/startup/opencode-startup-prompt'
@@ -202,6 +203,7 @@ export abstract class AgentHookServerLifecycle extends AgentHookServerStatusHook
   /** Quit retains status until chat teardown reads resumable child and background work. */
   stop(options?: { keepStatus?: boolean }): void {
     this.startup.stop()
+    discardHookTranscriptTurns(this.state)
     this.claudeAgentViews.clear()
     this.claudePermissionHooks.drain()
     // Terminal status may still have a pending write while hook ingress is disabled.

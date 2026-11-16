@@ -79,3 +79,57 @@ it.each([false, true])(
     }
   }
 )
+
+it('answers replacement hooks after restart before the discarded owner probe settles', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'relay-http-owner-replacement-'))
+  const forward = vi.fn<(event: AgentHookRelayEnvelope) => void>()
+  const server = new RelayAgentHookServer({ endpointDir: directory, forward })
+  const paneKey = makePaneKey('tab-1', '11111111-1111-4111-8111-111111111111')
+  const post = (source: string, hook_event_name: string, session: string) => {
+    const { port, token } = server.getCoordinates()
+    return fetch(`http://127.0.0.1:${port}/hook/${source}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Orca-Agent-Hook-Token': token },
+      body: JSON.stringify({
+        paneKey,
+        tabId: 'tab-1',
+        worktreeId: 'wt-1',
+        ...(source === 'claude'
+          ? { agentProcess: { pid: 4001, platform: 'linux', startTime: 'birth' } }
+          : {}),
+        payload: { hook_event_name, session_id: session, prompt: session }
+      })
+    })
+  }
+  let release: (() => void) | undefined
+  let obsolete: Promise<Response> | undefined
+  try {
+    await server.start()
+    for (const event of ['UserPromptSubmit', 'Stop']) {
+      expect((await post('claude', event, 'claude-parent')).status).toBe(204)
+    }
+    probe.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve('exited')
+        })
+    )
+    obsolete = post('codex', 'UserPromptSubmit', 'obsolete-codex')
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledOnce())
+    server.stop()
+    await server.start()
+    expect((await post('codex', 'UserPromptSubmit', 'current-codex')).status).toBe(204)
+    expect(forward.mock.lastCall?.[0].providerSession?.id).toBe('current-codex')
+    forward.mockClear()
+    release?.()
+    expect((await obsolete).status).toBe(204)
+    expect(forward).not.toHaveBeenCalled()
+    expect(server.replayCachedPayloadsForPanes()).toBe(1)
+    expect(forward.mock.lastCall?.[0].providerSession?.id).toBe('current-codex')
+  } finally {
+    release?.()
+    await obsolete
+    server.stop()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})

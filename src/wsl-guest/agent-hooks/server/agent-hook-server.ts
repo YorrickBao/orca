@@ -1,4 +1,5 @@
 import { AgentHookStartup } from '../../../shared/agent-hook-listener/transport/agent-hook-startup'
+import { discardHookTranscriptTurns } from '../../../shared/agent-hook-listener/transcripts/hook-transcript-read-ahead'
 import { bindRelayHookServer } from './agent-hook-server-bind'
 import {
   inferRelayClaudeInterrupt,
@@ -197,6 +198,7 @@ export class RelayAgentHookServer extends RelayAgentHookCanonicalStatus {
 
   stop(): void {
     this.startup.stop()
+    discardHookTranscriptTurns(this.state)
     this.server?.close()
     this.server = null
     this.port = 0
@@ -280,10 +282,8 @@ export class RelayAgentHookServer extends RelayAgentHookCanonicalStatus {
   /** Env vars to inject into relay-spawned PTYs so the hook script/plugin POSTs back to this loopback server. */
   buildPtyEnv(): Record<string, string> {
     return buildRelayHookPtyEnv({
-      port: this.port,
-      token: this.token,
+      ...this.getCoordinates(),
       env: this.env,
-      endpointFilePath: this.endpointFilePath,
       endpointFileWritten: this.endpointFileWritten
     })
   }

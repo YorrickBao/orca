@@ -171,11 +171,12 @@ export abstract class AgentHookServerStatusRetries extends AgentHookServerStatus
     if (!this.ownsTranscriptPoll(paneKey, poll)) {
       return undefined
     }
+    const generation = this.statusHookGeneration
     return enterTranscriptPollTurn(this.state, poll.source, paneKey, poll.body)
       .then((turn) => {
         try {
           // The read awaited: a hook, clear or shutdown may have superseded this payload meanwhile.
-          if (this.ownsTranscriptPoll(paneKey, poll)) {
+          if (this.statusHookGeneration === generation && this.ownsTranscriptPoll(paneKey, poll)) {
             turn.apply(() => this.applyTranscriptPoll(paneKey, poll))
           }
         } finally {

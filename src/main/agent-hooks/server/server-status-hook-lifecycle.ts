@@ -1,4 +1,7 @@
-import { enterHookTranscriptTurn } from '../../../shared/agent-hook-listener/transcripts/hook-transcript-read-ahead'
+import {
+  discardHookTranscriptTurns,
+  enterHookTranscriptTurn
+} from '../../../shared/agent-hook-listener/transcripts/hook-transcript-read-ahead'
 import { parsePaneKey } from '../../../shared/workspace-layout/stable-pane-id'
 import type { EnrichedAgentHookEventPayload } from './server-types'
 import {
@@ -39,6 +42,7 @@ export abstract class AgentHookServerStatusHookLifecycle extends AgentHookServer
       return
     }
     this.statusHookGeneration += 1
+    discardHookTranscriptTurns(this.state)
     if (!enabled) {
       this.claudeAgentViews.clear()
       this.flushStatusPersistSync()
@@ -112,6 +116,9 @@ export abstract class AgentHookServerStatusHookLifecycle extends AgentHookServer
   ): Promise<{ toolCallOwner: EnrichedAgentHookEventPayload | null } | undefined> {
     const turn = await enterHookTranscriptTurn(this.state, source, body)
     try {
+      if (!isCurrent()) {
+        return undefined
+      }
       await this.checkHookOwner(source, body)
       if (!isCurrent()) {
         return undefined

@@ -83,7 +83,7 @@ export function resolveChildTranscript(
   parentPath: string,
   threadId: string,
   startedAt: number,
-  entriesByDirectory: Map<string, string[] | undefined>
+  directoryEntries: Map<string, string[] | undefined>
 ): string | 'unfetched' | undefined {
   if (!SAFE_THREAD_ID.test(threadId)) {
     return undefined
@@ -93,17 +93,15 @@ export function resolveChildTranscript(
   const childDir = childDayDirectory(parentPath, startedAt)
   const directories = childDir && childDir !== parentDir ? [parentDir, childDir] : [parentDir]
   for (const directory of directories) {
-    if (!entriesByDirectory.has(directory)) {
-      entriesByDirectory.set(directory, readTranscriptDirectory(directory))
+    if (!directoryEntries.has(directory)) {
+      directoryEntries.set(directory, readTranscriptDirectory(directory))
     }
-    const fileName = entriesByDirectory.get(directory)?.find((entry) => entry.endsWith(suffix))
+    const fileName = directoryEntries.get(directory)?.find((entry) => entry.endsWith(suffix))
     if (fileName) {
       return join(directory, fileName)
     }
   }
-  return directories.some((directory) => !entriesByDirectory.get(directory))
-    ? 'unfetched'
-    : undefined
+  return directories.some((directory) => !directoryEntries.get(directory)) ? 'unfetched' : undefined
 }
 
 export function readSubagentActivity(recordValue: JsonRecord):
@@ -293,12 +291,12 @@ export function reconcileCodexSubagentTranscript(
       tracked.startedAt
     )
   }
-  const entriesByDirectory = new Map<string, string[] | undefined>()
+  const directoryEntries = new Map<string, string[] | undefined>()
   const now = Date.now()
   for (const [id, tracked] of state.subagents) {
     const resolved =
       tracked.filePath ??
-      resolveChildTranscript(normalizedPath, id, tracked.startedAt, entriesByDirectory)
+      resolveChildTranscript(normalizedPath, id, tracked.startedAt, directoryEntries)
     tracked.filePath = resolved === 'unfetched' ? undefined : resolved
     const records =
       resolved === 'unfetched' ? resolved : readJsonlCursor(tracked, isCodexStatusTranscriptLine)

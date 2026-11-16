@@ -184,7 +184,7 @@ export abstract class AgentHookServerIngestNormalization extends AgentHookServer
     }
     const token = this.token
     const statusHookGeneration = this.statusHookGeneration
-    const apply = () => {
+    const assertCurrent = () => {
       if (
         !this.statusHooksEnabled ||
         this.token !== token ||
@@ -192,6 +192,9 @@ export abstract class AgentHookServerIngestNormalization extends AgentHookServer
       ) {
         throw new Error('Status hook spool replay interrupted')
       }
+    }
+    const apply = () => {
+      assertCurrent()
       this.applySpoolHook(record, body)
     }
     const body = this.normalizeHookBodyPaneKeyAlias(buildSpoolHookBody(record))
@@ -199,6 +202,7 @@ export abstract class AgentHookServerIngestNormalization extends AgentHookServer
     // Replay holds the pane's transcript turn from its rollout reads through apply, like a live hook.
     return enterHookTranscriptTurn(this.state, source, body).then(async (turn) => {
       try {
+        assertCurrent()
         const pending = this.checkHookOwner(source, body, answerBy)
         await (pending ? pending.then(() => turn.apply(apply)) : turn.apply(apply))
       } finally {
