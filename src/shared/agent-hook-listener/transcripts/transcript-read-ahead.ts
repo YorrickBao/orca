@@ -134,15 +134,11 @@ function coalesced<T>(
   priority: TranscriptReadPriority,
   read: () => Promise<T>
 ): Promise<T | Stalled> {
-  let job = inFlight.get(key)
-  if (!job) {
-    job = {}
-    inFlight.set(key, job)
+  const current = inFlight.get(key) ?? {}
+  inFlight.set(key, current)
+  if (current.queued) {
+    return current.queued as Promise<T | Stalled>
   }
-  if (job.queued) {
-    return job.queued as Promise<T | Stalled>
-  }
-  const current = job
   const run = (): Promise<T | Stalled> => {
     current.queued = undefined
     const { result, done } = fileJob(priority, read)
