@@ -34,7 +34,10 @@ type Stalled = typeof STALLED | typeof REFUSED
 
 const fileJobs: Gate = { active: 0, stalled: 0, limit: FILE_JOB_CONCURRENCY, waiting: [] }
 const rounds: Gate = { active: 0, stalled: 0, limit: ROUND_CONCURRENCY, waiting: [] }
-const inFlight = new Map<string, { running?: Promise<void>; result?: Promise<unknown>; queued?: Promise<unknown> }>()
+const inFlight = new Map<
+  string,
+  { running?: Promise<void>; result?: Promise<unknown>; queued?: Promise<unknown> }
+>()
 let applying: TranscriptReads | undefined
 
 function drain(gate: Gate): void {
@@ -160,7 +163,7 @@ function coalesced<T>(
     return run()
   }
   const running = current.running
-  const queued = current.result!.then((value) => value === STALLED ? STALLED : running.then(run))
+  const queued = current.result!.then((value) => (value === STALLED ? STALLED : running.then(run)))
   current.queued = queued
   void queued.then(() => {
     if (current.queued === queued) {

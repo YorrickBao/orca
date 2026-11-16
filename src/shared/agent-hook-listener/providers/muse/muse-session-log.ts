@@ -6,7 +6,12 @@ import {
   type JsonlCursor,
   type JsonRecord
 } from '../codex/codex-rollout-jsonl-cursor'
-import { fetchTranscriptTail, peekLocatedTranscriptPath, TranscriptReads, transcriptFileExists } from '../../transcripts/transcript-read-ahead'
+import {
+  fetchTranscriptTail,
+  peekLocatedTranscriptPath,
+  TranscriptReads,
+  transcriptFileExists
+} from '../../transcripts/transcript-read-ahead'
 
 // Muse stores local-date shards under <XDG_DATA_HOME>/muse/sessions (default ~/.local/share/muse/sessions): YYYY/MM/DD/<uuid>/session.jsonl. No upstream override exists.
 export function resolveMuseSessionsDir(override?: string): string {

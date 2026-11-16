@@ -98,8 +98,13 @@ export function ingestRelayHookSpoolRecord(
     return pending ? pending.then(() => turn.apply(apply)) : turn.apply(apply)
   }
   // Replay holds the pane's transcript turn from its rollout reads through apply, like a live hook.
-  return enterHookTranscriptTurn(state, source, body, (paneKey) =>
-    host.providerNormalization?.statusOf(source, paneKey) ?? state.lastStatusByPaneKey.get(paneKey)
+  return enterHookTranscriptTurn(
+    state,
+    source,
+    body,
+    (paneKey) =>
+      host.providerNormalization?.statusOf(source, paneKey) ??
+      state.lastStatusByPaneKey.get(paneKey)
   ).then(async (turn) => {
     try {
       await admit(turn)

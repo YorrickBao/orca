@@ -139,7 +139,12 @@ function hookPayloadOf(
         payload: {
           ...(payload as Record<string, unknown>),
           hook_event_name:
-            readFirstString(envelope, ['hook_event_name', 'hookEventName', 'hook_type', 'hookType']) ??
+            readFirstString(envelope, [
+              'hook_event_name',
+              'hookEventName',
+              'hook_type',
+              'hookType'
+            ]) ??
             (payload as Record<string, unknown>).hook_event_name ??
             (payload as Record<string, unknown>).hookEventName
         }

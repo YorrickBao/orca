@@ -10,11 +10,16 @@ import { performance } from 'node:perf_hooks'
 import { setTimeout as delay } from 'node:timers/promises'
 
 const baseline = await import(pathToFileURL(process.argv[2]).href)
-const { createHookListenerState } = await import('../../../src/shared/agent-hook-listener/listener-state.ts')
-const { normalizeHookPayload } = await import('../../../src/shared/agent-hook-listener/normalization/normalize-hook-payload.ts')
-const { seedLegacyAgentStatusForTests } = await import('../../../src/shared/agent-hook-listener/legacy-agent-status-test-seed.ts')
-const { pollCodexTranscriptStatus } = await import('../../../src/shared/agent-hook-listener/providers/codex/codex-transcript-poll.ts')
-const { enterHookTranscriptTurn, enterTranscriptPollTurn } = await import('../../../src/shared/agent-hook-listener/transcripts/hook-transcript-read-ahead.ts')
+const { createHookListenerState } =
+  await import('../../../src/shared/agent-hook-listener/listener-state.ts')
+const { normalizeHookPayload } =
+  await import('../../../src/shared/agent-hook-listener/normalization/normalize-hook-payload.ts')
+const { seedLegacyAgentStatusForTests } =
+  await import('../../../src/shared/agent-hook-listener/legacy-agent-status-test-seed.ts')
+const { pollCodexTranscriptStatus } =
+  await import('../../../src/shared/agent-hook-listener/providers/codex/codex-transcript-poll.ts')
+const { enterHookTranscriptTurn, enterTranscriptPollTurn } =
+  await import('../../../src/shared/agent-hook-listener/transcripts/hook-transcript-read-ahead.ts')
 
 const root = fs.mkdtempSync(join(tmpdir(), 'codex-poll-io-bench-'))
 const line = (payload) => JSON.stringify(payload) + '\n'
@@ -29,14 +34,30 @@ for (let pane = 0; pane < 50; pane++) {
   let parent = line({ type: 'turn_context', payload: { approvals_reviewer: 'auto_review' } })
   for (let child = 0; child < 8; child++) {
     const id = `child-${child}`
-    parent += line({ type: 'event_msg', payload: { type: 'sub_agent_activity', agent_thread_id: id, kind: 'started', agent_path: `/root/task_${child}` } })
+    parent += line({
+      type: 'event_msg',
+      payload: {
+        type: 'sub_agent_activity',
+        agent_thread_id: id,
+        kind: 'started',
+        agent_path: `/root/task_${child}`
+      }
+    })
     const childPath = join(directory, `rollout-${id}.jsonl`)
     fs.writeFileSync(childPath, filler + started)
     paths.push(childPath)
   }
   fs.writeFileSync(paths[0], filler.repeat(16) + parent)
   const paneKey = `tab-${pane}:11111111-1111-4111-8111-111111111111`
-  const body = { paneKey, payload: { hook_event_name: 'PermissionRequest', session_id: `session-${pane}`, tool_name: 'Bash', transcript_path: paths[0] } }
+  const body = {
+    paneKey,
+    payload: {
+      hook_event_name: 'PermissionRequest',
+      session_id: `session-${pane}`,
+      tool_name: 'Bash',
+      transcript_path: paths[0]
+    }
+  }
   const turn = await enterHookTranscriptTurn(state, 'codex', body)
   let original
   try {
@@ -61,7 +82,9 @@ for (const name of ['statSync', 'openSync', 'readSync', 'closeSync']) {
     if (name === 'statSync' && latency) Atomics.wait(sleepWord, 0, 0, latency)
     return original(...args)
   }
-  restore.push(() => { fs[name] = original })
+  restore.push(() => {
+    fs[name] = original
+  })
 }
 syncBuiltinESMExports()
 const open = fsPromises.open
@@ -74,7 +97,9 @@ fsPromises.open = async (...args) => {
   }
   return handle
 }
-restore.push(() => { fsPromises.open = open })
+restore.push(() => {
+  fsPromises.open = open
+})
 
 async function measure(mode, count, slowStatMs) {
   latency = slowStatMs
@@ -83,7 +108,13 @@ async function measure(mode, count, slowStatMs) {
   for (const pane of selected) {
     for (const path of pane.paths) fs.appendFileSync(path, started)
   }
-  const oldCursors = selected.flatMap((pane) => pane.paths.map((path) => ({ filePath: path, offset: fs.statSync(path).size - Buffer.byteLength(started), carry: '' })))
+  const oldCursors = selected.flatMap((pane) =>
+    pane.paths.map((path) => ({
+      filePath: path,
+      offset: fs.statSync(path).size - Buffer.byteLength(started),
+      carry: ''
+    }))
+  )
   let previous = performance.now()
   let maxLag = 0
   const heartbeat = setInterval(() => {
@@ -100,21 +131,33 @@ async function measure(mode, count, slowStatMs) {
     // The old poll reads the root and every tracked child synchronously.
     for (const cursor of oldCursors) baseline.readJsonlCursor(cursor)
   } else {
-    await Promise.all(selected.map(async (pane) => {
-      const turn = await enterTranscriptPollTurn(state, 'codex', pane.paneKey, pane.body)
-      try {
-        const event = turn.apply(() => pollCodexTranscriptStatus(state, pane.original, pane.body, 'production'))
-        assert.equal(event?.payload.state, 'working')
-        assert.equal(event?.payload.subagents?.length, 8)
-      } finally {
-        turn.release()
-      }
-    }))
+    await Promise.all(
+      selected.map(async (pane) => {
+        const turn = await enterTranscriptPollTurn(state, 'codex', pane.paneKey, pane.body)
+        try {
+          const event = turn.apply(() =>
+            pollCodexTranscriptStatus(state, pane.original, pane.body, 'production')
+          )
+          assert.equal(event?.payload.state, 'working')
+          assert.equal(event?.payload.subagents?.length, 8)
+        } finally {
+          turn.release()
+        }
+      })
+    )
   }
   const wallMs = performance.now() - start
   await delay(5)
   clearInterval(heartbeat)
-  const row = { mode, panes: count, childrenPerPane: 8, slowStatMs, wallMs: +wallMs.toFixed(2), maxEventLoopBlockMs: +Math.max(0, maxLag).toFixed(2), syncCalls }
+  const row = {
+    mode,
+    panes: count,
+    childrenPerPane: 8,
+    slowStatMs,
+    wallMs: +wallMs.toFixed(2),
+    maxEventLoopBlockMs: +Math.max(0, maxLag).toFixed(2),
+    syncCalls
+  }
   console.log(JSON.stringify(row))
   if (mode === 'new') assert.equal(syncCalls, 0)
 }

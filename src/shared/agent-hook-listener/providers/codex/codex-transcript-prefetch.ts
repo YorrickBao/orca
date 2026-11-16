@@ -134,9 +134,7 @@ async function fetchUnresolvedChildren(
   await Promise.all(
     [...children].flatMap(([id, startedAt]) => {
       const filePath = resolveChildTranscript(parentPath, id, startedAt, entriesByDirectory)
-      return filePath && filePath !== 'unfetched'
-        ? [fetchChildTranscript(reads, filePath)]
-        : []
+      return filePath && filePath !== 'unfetched' ? [fetchChildTranscript(reads, filePath)] : []
     })
   )
 }
@@ -147,7 +145,10 @@ async function fetchChildTranscript(reads: TranscriptReads, filePath: string): P
   if (tail && typeof tail === 'object') {
     // Newly discovered children can owe an identity retry in this same reconcile.
     if (tail.start === 0) {
-      reads.heads.set(filePath, { size: tail.size, bytes: tail.bytes.subarray(0, TRANSCRIPT_LINE_MAX_BYTES) })
+      reads.heads.set(filePath, {
+        size: tail.size,
+        bytes: tail.bytes.subarray(0, TRANSCRIPT_LINE_MAX_BYTES)
+      })
     } else {
       await fetchTranscriptHead(reads, filePath)
     }

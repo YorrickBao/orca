@@ -23,7 +23,9 @@ describe('transcript read-ahead', () => {
       const created = await runProcess({ program: 'mkfifo', args: [fifo], timeoutMs: 5000 })
       expect(created.code).toBe(0)
       symlinkSync(fifo, link)
-      const readerPath = resolve('src/shared/agent-hook-listener/transcripts/transcript-read-ahead.ts')
+      const readerPath = resolve(
+        'src/shared/agent-hook-listener/transcripts/transcript-read-ahead.ts'
+      )
       const result = await runProcess({
         program: process.execPath,
         args: [

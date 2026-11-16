@@ -106,7 +106,9 @@ describe('Codex transcript reads', () => {
       expect(event?.payload.state).toBe('working')
       seedLegacyAgentStatusForTests(state, event!)
       const pollTurn = await enterTranscriptPollTurn(state, 'codex', PANE_KEY, body)
-      const polled = pollTurn.apply(() => pollCodexTranscriptStatus(state, event!, body, 'production'))
+      const polled = pollTurn.apply(() =>
+        pollCodexTranscriptStatus(state, event!, body, 'production')
+      )
       expect(polled?.payload.subagents?.[0]?.description).toBe('Builder')
       pollTurn.release()
       syncCalls.counting = false
@@ -136,7 +138,9 @@ describe('Codex transcript reads', () => {
     let original: NonNullable<ReturnType<typeof normalizeHookPayload>>
     const polled = enterTranscriptPollTurn(state, 'codex', PANE_KEY, body('first')).then((turn) => {
       try {
-        const event = turn.apply(() => pollCodexTranscriptStatus(state, original, body('first'), 'production'))
+        const event = turn.apply(() =>
+          pollCodexTranscriptStatus(state, original, body('first'), 'production')
+        )
         states.push(event!.payload.state)
         seedLegacyAgentStatusForTests(state, event!)
       } finally {
@@ -145,22 +149,28 @@ describe('Codex transcript reads', () => {
     })
     const next = enterHookTranscriptTurn(state, 'codex', body('next')).then((turn) => {
       try {
-        const event = turn.apply(() => normalizeHookPayload(state, 'codex', body('next'), 'production'))
+        const event = turn.apply(() =>
+          normalizeHookPayload(state, 'codex', body('next'), 'production')
+        )
         states.push(event!.payload.state)
       } finally {
         turn.release()
       }
     })
     try {
-      original = first.apply(() => normalizeHookPayload(state, 'codex', body('first'), 'production'))!
+      original = first.apply(() =>
+        normalizeHookPayload(state, 'codex', body('first'), 'production')
+      )!
       states.push(original.payload.state)
       seedLegacyAgentStatusForTests(state, original)
-      appendFileSync(filePath, line({ type: 'event_msg', payload: { type: 'task_complete', turn_id: 'first' } }))
+      appendFileSync(
+        filePath,
+        line({ type: 'event_msg', payload: { type: 'task_complete', turn_id: 'first' } })
+      )
     } finally {
       first.release()
     }
     await Promise.all([polled, next])
     expect(states).toEqual(['working', 'done', 'working'])
   })
-
 })
