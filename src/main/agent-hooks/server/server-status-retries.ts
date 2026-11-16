@@ -160,7 +160,9 @@ export abstract class AgentHookServerStatusRetries extends AgentHookServerStatus
     // Recheck ownership at callback time; newer events supersede this payload even if children remain.
     return (
       paneKey === poll.original.paneKey &&
-      Boolean(this.server) &&
+      this.server?.listening === true &&
+      this.statusHooksEnabled &&
+      this.ownerStateInitialized &&
       this.state.lastStatusByPaneKey.get(poll.original.paneKey) === poll.original
     )
   }

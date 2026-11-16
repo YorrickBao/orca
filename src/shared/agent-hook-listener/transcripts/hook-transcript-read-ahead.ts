@@ -62,7 +62,7 @@ function enterPaneTranscriptTurn(
     apply: (step) => applyTranscriptReads(reads, step),
     release
   }
-  // Why: an unreadable or stalled file is the synchronous code's "no news", never a reason to drop the hook.
+  // A read failure must not drop the hook; normalization keeps its existing unreadable-file behavior.
   return (previous ?? Promise.resolve())
     .then(() => (read ? admitTranscriptRound(reads, () => read(reads)) : undefined))
     .catch(() => undefined)
@@ -98,7 +98,7 @@ function codexHookReadHint(
   statusOf: (paneKey: string) => AgentHookEventPayload | undefined
 ): CodexTranscriptReadHint {
   const eventName = hook.hook_event_name ?? hook.hookEventName
-  const agentId = readString(hook, 'agent_id')
+  const agentId = readString(hook, 'agent_id')?.trim()
   const transcriptPath = readFirstString(hook, ['transcript_path', 'transcriptPath'])
   if (eventName === 'SubagentStart') {
     return {
@@ -134,7 +134,16 @@ function hookPayloadOf(
     }
   }
   return paneKey && typeof payload === 'object' && payload !== null
-    ? { paneKey, payload: payload as Record<string, unknown> }
+    ? {
+        paneKey,
+        payload: {
+          ...(payload as Record<string, unknown>),
+          hook_event_name:
+            readFirstString(envelope, ['hook_event_name', 'hookEventName', 'hook_type', 'hookType']) ??
+            (payload as Record<string, unknown>).hook_event_name ??
+            (payload as Record<string, unknown>).hookEventName
+        }
+      }
     : undefined
 }
 

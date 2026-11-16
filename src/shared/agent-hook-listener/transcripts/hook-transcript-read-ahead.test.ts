@@ -73,13 +73,14 @@ describe('Codex transcript reads', () => {
           payload: {
             type: 'sub_agent_activity',
             agent_thread_id: id,
-            agent_path: `/root/task_${index}`,
+            ...(index === 0 ? {} : { agent_path: `/root/task_${index}` }),
             kind: 'started'
           }
         })
         writeFileSync(
           join(day, `rollout-child-${id}.jsonl`),
-          line({ type: 'session_meta', payload: { id } }) +
+          line({ type: 'session_meta', payload: { id, agent_nickname: 'Builder' } }) +
+            line({ type: 'turn_context', payload: { model: 'gpt-6.1-sol' } }) +
             line({ type: 'event_msg', payload: { type: 'task_started' } })
         )
       }
@@ -100,11 +101,13 @@ describe('Codex transcript reads', () => {
       const event = hookTurn.apply(() => normalizeHookPayload(state, 'codex', body, 'production'))
       hookTurn.release()
       expect(event?.payload.subagents).toHaveLength(childCount)
+      expect(event?.payload.subagents?.[0]?.model).toBe('gpt-6.1-sol')
       // The rollout says Codex's own reviewer answers this approval.
       expect(event?.payload.state).toBe('working')
       seedLegacyAgentStatusForTests(state, event!)
       const pollTurn = await enterTranscriptPollTurn(state, 'codex', PANE_KEY, body)
-      pollTurn.apply(() => pollCodexTranscriptStatus(state, event!, body, 'production'))
+      const polled = pollTurn.apply(() => pollCodexTranscriptStatus(state, event!, body, 'production'))
+      expect(polled?.payload.subagents?.[0]?.description).toBe('Builder')
       pollTurn.release()
       syncCalls.counting = false
 

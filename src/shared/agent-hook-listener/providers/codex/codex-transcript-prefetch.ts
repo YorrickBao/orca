@@ -17,6 +17,7 @@ import {
   fetchTranscriptHead,
   fetchTranscriptTail,
   peekTranscriptTail,
+  TRANSCRIPT_LINE_MAX_BYTES,
   type TranscriptReads
 } from '../../transcripts/transcript-read-ahead'
 
@@ -133,7 +134,22 @@ async function fetchUnresolvedChildren(
   await Promise.all(
     [...children].flatMap(([id, startedAt]) => {
       const filePath = resolveChildTranscript(parentPath, id, startedAt, entriesByDirectory)
-      return filePath && filePath !== 'unfetched' ? [fetchTranscriptTail(reads, filePath, 0)] : []
+      return filePath && filePath !== 'unfetched'
+        ? [fetchChildTranscript(reads, filePath)]
+        : []
     })
   )
+}
+
+async function fetchChildTranscript(reads: TranscriptReads, filePath: string): Promise<void> {
+  await fetchTranscriptTail(reads, filePath, 0)
+  const tail = peekTranscriptTail(reads, filePath, 0)
+  if (tail && typeof tail === 'object') {
+    // Newly discovered children can owe an identity retry in this same reconcile.
+    if (tail.start === 0) {
+      reads.heads.set(filePath, { size: tail.size, bytes: tail.bytes.subarray(0, TRANSCRIPT_LINE_MAX_BYTES) })
+    } else {
+      await fetchTranscriptHead(reads, filePath)
+    }
+  }
 }
