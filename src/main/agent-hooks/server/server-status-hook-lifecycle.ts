@@ -3,7 +3,6 @@ import {
   enterHookTranscriptTurn
 } from '../../../shared/agent-hook-listener/transcripts/hook-transcript-read-ahead'
 import { parsePaneKey } from '../../../shared/workspace-layout/stable-pane-id'
-import type { EnrichedAgentHookEventPayload } from './server-types'
 import {
   drainAgentHookSpoolAsync,
   type SpoolRecord
@@ -113,7 +112,7 @@ export abstract class AgentHookServerStatusHookLifecycle extends AgentHookServer
     source: AgentHookSource,
     body: unknown,
     isCurrent: () => boolean
-  ): Promise<{ toolCallOwner: EnrichedAgentHookEventPayload | null } | undefined> {
+  ): Promise<{ toolCallOwner: AgentHookEventPayload | null } | undefined> {
     const turn = await enterHookTranscriptTurn(this.state, source, body)
     try {
       if (!isCurrent()) {
