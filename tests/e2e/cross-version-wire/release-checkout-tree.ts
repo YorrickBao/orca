@@ -18,13 +18,15 @@ const ARCHIVE_PATHS = [
   'src/shared',
   'src/preload',
   'src/renderer',
-  'src/types',
-  'mobile/src/worktree/agent-row-display.ts'
+  'src/types'
 ]
 // Why optional: a release may have either or both, and `git archive` refuses a missing pathspec.
 const OPTIONAL_ARCHIVE_PATHS = [
   'src/relay',
   'src/wsl-guest',
+  // The phone row reader, before and after its move under agent-lineage/.
+  'mobile/src/worktree/agent-row-display.ts',
+  'mobile/src/worktree/agent-lineage/agent-row-display.ts',
   // Released phone read operations and their runtime decoding dependencies.
   'mobile/src/agent-history/agent-history-reply-schema.ts',
   'mobile/src/agent-history/mobile-agent-history-operations.ts',
