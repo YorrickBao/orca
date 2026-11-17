@@ -13,13 +13,7 @@ import { prepareReleaseSnapshotSource } from './release-checkout-prefetch.ts'
 
 // Extract runtime, renderer, codecs and the phone row reader; omit CLI to bound cold-CI extraction.
 // Add source workspace packages from each release’s own policy.
-const ARCHIVE_PATHS = [
-  'src/main',
-  'src/shared',
-  'src/preload',
-  'src/renderer',
-  'src/types'
-]
+const ARCHIVE_PATHS = ['src/main', 'src/shared', 'src/preload', 'src/renderer', 'src/types']
 // Why optional: a release may have either or both, and `git archive` refuses a missing pathspec.
 const OPTIONAL_ARCHIVE_PATHS = [
   'src/relay',
